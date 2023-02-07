@@ -55,6 +55,9 @@ declare module 'react-native-beacons-manager' {
       flag: boolean
     ): void;
 
+    startForegroundService(): Promise<any>;
+    stopForegroundService(): Promise<any>;
+
     detectIBeacons(): void;
 
     detectAltBeacons(): void;
@@ -68,7 +71,7 @@ declare module 'react-native-beacons-manager' {
     detectEddystoneTLM(): void;
 
     detectCustomBeaconLayout(
-      parser: number
+      parser: string
     ): void;
 
     setBackgroundScanPeriod(

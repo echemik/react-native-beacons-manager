@@ -1,11 +1,20 @@
 package com.mackentoch.beaconsandroid;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.TaskStackBuilder;
 import android.content.Context;
 import android.content.Intent;
-import android.content.ServiceConnection;
-import android.os.RemoteException;
+import android.os.Build;
+
 import org.jetbrains.annotations.Nullable;
+
+import android.service.notification.StatusBarNotification;
 import android.util.Log;
+
+import androidx.core.app.NotificationCompat;
 
 import com.facebook.react.bridge.Callback;
 import com.facebook.react.bridge.ReactApplicationContext;
@@ -20,7 +29,6 @@ import com.facebook.react.bridge.WritableNativeMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
 import org.altbeacon.beacon.Beacon;
-import org.altbeacon.beacon.BeaconConsumer;
 import org.altbeacon.beacon.BeaconManager;
 import org.altbeacon.beacon.BeaconParser;
 import org.altbeacon.beacon.BeaconTransmitter;
@@ -34,14 +42,18 @@ import org.altbeacon.beacon.service.RunningAverageRssiFilter;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
-public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements BeaconConsumer {
+public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements RangeNotifier {
   private static final String LOG_TAG = "BeaconsAndroidModule";
   private static final int RUNNING_AVG_RSSI_FILTER = 0;
   private static final int ARMA_RSSI_FILTER = 1;
   private BeaconManager mBeaconManager;
   private Context mApplicationContext;
   private ReactApplicationContext mReactContext;
+
+  private int notificationId = 456;
+  private String notificationChanelId = "Beacons manager";
 
   public BeaconsAndroidModule(ReactApplicationContext reactContext) {
     super(reactContext);
@@ -53,9 +65,10 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
     public void initialize() {
         this.mApplicationContext = this.mReactContext.getApplicationContext();
         this.mBeaconManager = BeaconManager.getInstanceForApplication(mApplicationContext);
-        // need to bind at instantiation so that service loads (to test more)
-        mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout("m:0-3=4c000215,i:4-19,i:20-21,i:22-23,p:24-24"));
-        bindManager();
+
+        mBeaconManager.getBeaconParsers().clear();
+        mBeaconManager.removeAllRangeNotifiers();
+        mBeaconManager.addRangeNotifier(this);
     }
 
     @Override
@@ -71,8 +84,6 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
     constants.put("NOT_SUPPORTED_BLE", BeaconTransmitter.NOT_SUPPORTED_BLE);
     constants.put("NOT_SUPPORTED_CANNOT_GET_ADVERTISER_MULTIPLE_ADVERTISEMENTS", BeaconTransmitter.NOT_SUPPORTED_CANNOT_GET_ADVERTISER_MULTIPLE_ADVERTISEMENTS);
     constants.put("NOT_SUPPORTED_CANNOT_GET_ADVERTISER", BeaconTransmitter.NOT_SUPPORTED_CANNOT_GET_ADVERTISER);
-    constants.put("RUNNING_AVG_RSSI_FILTER",RUNNING_AVG_RSSI_FILTER);
-    constants.put("ARMA_RSSI_FILTER",ARMA_RSSI_FILTER);
     return constants;
   }
 
@@ -81,27 +92,12 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
     Beacon.setHardwareEqualityEnforced(e.booleanValue());
   }
 
-  public void bindManager() {
-    if (!mBeaconManager.isBound(this)) {
-      Log.d(LOG_TAG, "BeaconsAndroidModule - bindManager: ");
-      mBeaconManager.bind(this);
-    }
-  }
-
-  public void unbindManager() {
-    if (mBeaconManager.isBound(this)) {
-      Log.d(LOG_TAG, "BeaconsAndroidModule - unbindManager: ");
-      mBeaconManager.unbind(this);
-    }
-  }
 
   @ReactMethod
   public void addParser(String parser, Callback resolve, Callback reject) {
     try {
       Log.d(LOG_TAG, "BeaconsAndroidModule - addParser: " + parser);
-      unbindManager();
       mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout(parser));
-      bindManager();
       resolve.invoke();
     } catch (Exception e) {
       reject.invoke(e.getMessage());
@@ -112,9 +108,7 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
   public void removeParser(String parser, Callback resolve, Callback reject) {
     try {
       Log.d(LOG_TAG, "BeaconsAndroidModule - removeParser: " + parser);
-      unbindManager();
       mBeaconManager.getBeaconParsers().remove(new BeaconParser().setBeaconLayout(parser));
-      bindManager();
       resolve.invoke();
     } catch (Exception e) {
       reject.invoke(e.getMessage());
@@ -124,13 +118,11 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
   @ReactMethod
   public void addParsersListToDetection(ReadableArray parsers, Callback resolve, Callback reject) {
     try {
-      unbindManager();
       for (int i = 0; i < parsers.size(); i++) {
         String parser = parsers.getString(i);
         Log.d(LOG_TAG, "addParsersListToDetection - add parser: " + parser);
         mBeaconManager.getBeaconParsers().add(new BeaconParser().setBeaconLayout(parser));
       }
-      bindManager();
       resolve.invoke(parsers);
     } catch (Exception e) {
       reject.invoke(e.getMessage());
@@ -140,13 +132,11 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
   @ReactMethod
   public void removeParsersListToDetection(ReadableArray parsers, Callback resolve, Callback reject) {
     try {
-      unbindManager();
       for (int i = 0; i < parsers.size(); i++) {
         String parser = parsers.getString(i);
         Log.d(LOG_TAG, "removeParsersListToDetection - remove parser: " + parser);
         mBeaconManager.getBeaconParsers().remove(new BeaconParser().setBeaconLayout(parser));
       }
-      bindManager();
       resolve.invoke(parsers);
     } catch (Exception e) {
       reject.invoke(e.getMessage());
@@ -224,36 +214,6 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
           array.pushMap(map);
       }
       callback.invoke(array);
-  }
-
-  /***********************************************************************************************
-   * BeaconConsumer
-   **********************************************************************************************/
-  @Override
-  public void onBeaconServiceConnect() {
-    Log.v(LOG_TAG, "onBeaconServiceConnect");
-
-    // deprecated since v2.9 (see github: https://github.com/AltBeacon/android-beacon-library/releases/tag/2.9)
-    // mBeaconManager.setMonitorNotifier(mMonitorNotifier);
-    // mBeaconManager.setRangeNotifier(mRangeNotifier);
-    mBeaconManager.addMonitorNotifier(mMonitorNotifier);
-    mBeaconManager.addRangeNotifier(mRangeNotifier);
-    sendEvent(mReactContext, "beaconServiceConnected", null);
-  }
-
-  @Override
-  public Context getApplicationContext() {
-      return mApplicationContext;
-  }
-
-  @Override
-  public void unbindService(ServiceConnection serviceConnection) {
-      mApplicationContext.unbindService(serviceConnection);
-  }
-
-  @Override
-  public boolean bindService(Intent intent, ServiceConnection serviceConnection, int i) {
-      return mApplicationContext.bindService(intent, serviceConnection, i);
   }
 
   /***********************************************************************************************
@@ -344,7 +304,7 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
       Log.d(LOG_TAG, "startRanging, rangingRegionId: " + regionId + ", rangingBeaconUuid: " + beaconUuid);
       try {
           Region region = createRegion(regionId, beaconUuid);
-          mBeaconManager.startRangingBeaconsInRegion(region);
+          mBeaconManager.startRangingBeacons(region);
           resolve.invoke();
       } catch (Exception e) {
           Log.e(LOG_TAG, "startRanging, error: ", e);
@@ -352,13 +312,11 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
       }
   }
 
-  private RangeNotifier mRangeNotifier = new RangeNotifier() {
-      @Override
-      public void didRangeBeaconsInRegion(Collection<Beacon> beacons, Region region) {
+  @Override
+  public void didRangeBeaconsInRegion(Collection<Beacon> beacons, Region region) {
     Log.d(LOG_TAG, "rangingConsumer didRangeBeaconsInRegion, beacons: " + beacons.toString());
     Log.d(LOG_TAG, "rangingConsumer didRangeBeaconsInRegion, region: " + region.toString());
     sendEvent(mReactContext, "beaconsDidRange", createRangingResponse(beacons, region));
-      }
   };
 
   private WritableMap createRangingResponse(Collection<Beacon> beacons, Region region) {
@@ -406,7 +364,7 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
   public void stopRanging(String regionId, String beaconUuid, Callback resolve, Callback reject) {
       Region region = createRegion(regionId, beaconUuid);
       try {
-          mBeaconManager.stopRangingBeaconsInRegion(region);
+          mBeaconManager.stopRangingBeacons(region);
           resolve.invoke();
       } catch (Exception e) {
           Log.e(LOG_TAG, "stopRanging, error: ", e);
@@ -450,5 +408,103 @@ public class BeaconsAndroidModule extends ReactContextBaseJavaModule implements 
         major.length() > 0 ? Identifier.parse(major) : null,
         minor.length() > 0 ? Identifier.parse(minor) : null
       );
+  }
+
+  private Notification generateNotification() {
+    NotificationManager notificationManager =
+      (NotificationManager) this.mApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE);
+    NotificationCompat.Builder builder;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      NotificationChannel channel = new NotificationChannel(notificationChanelId,
+        "Beacon Service", NotificationManager.IMPORTANCE_HIGH);
+      channel.enableLights(false);
+      channel.enableVibration(false);
+      channel.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
+      notificationManager.createNotificationChannel(channel);
+      builder = new NotificationCompat.Builder(this.mApplicationContext, channel.getId());
+    } else {
+      builder = new NotificationCompat.Builder(this.mApplicationContext);
+      builder.setPriority(Notification.PRIORITY_HIGH);
+    }
+
+    TaskStackBuilder stackBuilder = TaskStackBuilder.create(this.mApplicationContext);
+    Class<?> cls = mReactContext.hasCurrentActivity()
+      ? Objects.requireNonNull(mReactContext.getCurrentActivity()).getClass()
+      : Objects.requireNonNull(mReactContext.getApplicationContext()).getClass();
+    stackBuilder.addNextIntent(new Intent(this.mApplicationContext, cls));
+    PendingIntent resultPendingIntent =
+      stackBuilder.getPendingIntent(
+        0,
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? PendingIntent.FLAG_IMMUTABLE : PendingIntent.FLAG_UPDATE_CURRENT
+      );
+    builder.setSmallIcon(mApplicationContext.getResources().getIdentifier("ic_launcher", "mipmap", mApplicationContext.getPackageName()));
+    builder.setContentTitle("Scanning for beacons");
+
+    builder.setContentText("");
+
+
+    builder.setContentIntent(resultPendingIntent);
+
+    return builder.build();
+  }
+
+  @ReactMethod
+  public void startForegroundService(Callback resolve, Callback reject) {
+    NotificationManager mNotificationManager = (NotificationManager) mApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      boolean didResolved = false;
+      StatusBarNotification[] notifications = mNotificationManager.getActiveNotifications();
+      for (StatusBarNotification notification : notifications) {
+        if (notification.getId() == notificationId) {
+          didResolved = true;
+        }
+      }
+      if (didResolved) {
+        resolve.invoke(notificationId);
+      } else {
+        try {
+          mBeaconManager.enableForegroundServiceScanning(generateNotification(), notificationId);
+          mBeaconManager.setEnableScheduledScanJobs(false);
+
+          resolve.invoke(notificationId);
+        } catch (Exception e) {
+          Log.d(LOG_TAG, "Notif Exception " + e);
+          reject.invoke(e.getMessage());
+        }
+      }
+
+    } else {
+      try {
+        mBeaconManager.enableForegroundServiceScanning(generateNotification(),notificationId);
+        mBeaconManager.setEnableScheduledScanJobs(false);
+
+
+        resolve.invoke(notificationId);
+      } catch (Exception e) {
+        Log.d(LOG_TAG, "Notif Exception " + e);
+        reject.invoke(e.getMessage());
+      }
+    }
+  }
+
+  @ReactMethod
+  public void stopForegroundService(Callback resolve, Callback reject) {
+    try {
+      if (mBeaconManager.isAnyConsumerBound()) {
+        for (Region region : mBeaconManager.getMonitoredRegions()) {
+          mBeaconManager.stopMonitoring(region);
+          mBeaconManager.stopRangingBeacons(region);
+
+        }
+        mBeaconManager.removeAllRangeNotifiers();
+        mBeaconManager.removeAllMonitorNotifiers();
+      }
+      mBeaconManager.disableForegroundServiceScanning();
+      mBeaconManager.setEnableScheduledScanJobs(true);
+
+      resolve.invoke(!mBeaconManager.isAnyConsumerBound());
+    } catch (Exception e) {
+      reject.invoke(e.getMessage());
+    }
   }
 }
